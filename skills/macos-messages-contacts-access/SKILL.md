@@ -4,8 +4,11 @@ description: |
   Access macOS Messages and Contacts programmatically without Full Disk Access. Use when:
   (1) "Operation not permitted" error accessing ~/Library/Messages/chat.db or ~/Library/Application Support/AddressBook/,
   (2) Need to read iMessage history, contacts, or chat data from terminal/scripts,
-  (3) Full Disk Access isn't granted or isn't desirable. Covers AppleScript automation
-  permissions workaround and Beeper Desktop CLI as alternatives to direct database access.
+  (3) Need to SAVE or update a contact (name, phone, email, Instagram/social handle, note),
+  (4) CNContactStore/CNSaveRequest write fails with a CoreData 4097 XPC error,
+  (5) Full Disk Access isn't granted or isn't desirable. Covers AppleScript automation
+  permissions workaround, the read-vs-write permission split, and Beeper Desktop CLI as
+  alternatives to direct database access.
 author: Claude Code
 user-invocable: false
 ---
@@ -86,6 +89,60 @@ If you need direct SQLite access:
    ```bash
    sqlite3 ~/Library/Messages/chat.db "SELECT * FROM message LIMIT 10;"
    ```
+
+## Writing to Contacts (not just reading)
+
+**Reads and writes have different permission requirements.** A plain `swiftc`-compiled
+binary using `CNContactStore` can *read* contacts with only the TCC Contacts grant, but
+`CNSaveRequest` *writes* fail:
+
+```
+CoreData: error: XPC: synchronousRemoteObjectProxyWithErrorHandler: store
+'.../AddressBook-v22.abcddb' encountered error: NSCocoaErrorDomain Code=4097
+...
+{"error":"save failed: A Core Data error occurred.","ok":false}
+```
+
+The XPC store refuses a read-write connection to an unsigned, unentitled binary. It retries
+~8 times over 60s before failing, so it looks like a hang first.
+
+**Fix: use AppleScript for writes.** Contacts.app scripting goes through Automation
+permission, which the terminal already has:
+
+```bash
+osascript <<'EOF'
+tell application "Contacts"
+    set thePerson to make new person with properties {first name:"Jane", last name:"Doe", note:"context"}
+    make new phone at end of phones of thePerson with properties {label:"mobile", value:"+1 (555) 555-1234"}
+    make new social profile at end of social profiles of thePerson with properties {service name:"Instagram", user name:"janedoe"}
+    save
+end tell
+EOF
+```
+
+`save` is required — without it the change stays in memory and is lost.
+
+**Use `<repo-root>/scripts/save-contact`** rather than hand-rolling this. It is idempotent
+(updates instead of duplicating) and supports `--first --last --nickname --company --note
+--birthday --phone --email --instagram --twitter --linkedin --dry-run`.
+
+```bash
+./scripts/save-contact --first "Jane" --last "Doe" --phone "+15555551234" \
+    --instagram janedoe --note "met at conference"
+```
+
+### Performance trap: never iterate people in AppleScript
+
+`repeat with p in people` over a large address book takes **minutes** (it was still running
+after 90s and had to be killed). Two safe patterns:
+
+1. **Reads/matching** → use the fast Swift binary `<repo-root>/scripts/lookup-contacts`
+   (~1s, uses `CNContactStore` which is fine for reading).
+2. **AppleScript lookups** → only use native `whose` clauses, which Contacts.app evaluates
+   internally: `people whose name is "Jane Doe"` returns in ~2s.
+
+`save-contact` uses exactly this hybrid: `lookup-contacts` resolves a phone number to a
+name, then a `whose` query resolves that name to a person id.
 
 ## Verification
 

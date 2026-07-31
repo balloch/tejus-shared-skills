@@ -93,6 +93,12 @@ swiftc -O lookup-contacts.swift -o lookup-contacts
 
 ### When AppleScript is Still Better
 
+- **Writing to Contacts** — `CNContactStore` *reads* fine from a plain `swiftc` binary, but
+  `CNSaveRequest` *writes* fail with `NSCocoaErrorDomain Code=4097` (the XPC store refuses a
+  read-write connection to an unsigned, unentitled binary). It retries ~8x over 60s, so it
+  looks like a hang. Use AppleScript against Contacts.app for the write, and keep Swift for
+  the lookup. See the `macos-messages-contacts-access` skill and `scripts/save-contact` in
+  the personal_assistant_claude repo.
 - **Browser tab control** — No Swift framework for cross-browser tab enumeration
 - **UI automation** — System Events / Accessibility API (though Swift can do this too via AX)
 - **One-off quick scripts** — If it runs once and speed doesn't matter
